@@ -19,13 +19,20 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
+
+import com.google.cloud.vision.v1.*;
 
 @RefreshScope
 @Controller
 @SessionAttributes( "name" )
 public class FrontendController
 {
+    @Value( "${greeting:Hello}" )
+    private String greeting;
+
     @Autowired
     private GuestbookMessagesClient client;
 
@@ -43,8 +50,33 @@ public class FrontendController
     @Autowired
     private GcpProjectIdProvider projectIdProvider;
 
-    @Value( "${greeting:Hello}" )
-    private String greeting;
+    @Autowired
+    private ImageAnnotatorClient annotatorClient;
+
+    private void analyzeImage(String uri) {
+        // After the image was written to GCS,
+        // analyze it with the GCS URI.It's also
+        // possible to analyze an image embedded in
+        // the request as a Base64 encoded payload.
+        List<AnnotateImageRequest> requests = new ArrayList<>();
+        ImageSource imgSrc = ImageSource.newBuilder()
+                                        .setGcsImageUri(uri).build();
+        Image img = Image.newBuilder().setSource(imgSrc).build();
+        Feature feature = Feature.newBuilder()
+                                 .setType(Feature.Type.LABEL_DETECTION).build();
+        AnnotateImageRequest request = AnnotateImageRequest
+                                               .newBuilder()
+                                               .addFeatures(feature)
+                                               .setImage(img)
+                                               .build();
+        requests.add(request);
+        BatchAnnotateImagesResponse responses =
+                annotatorClient.batchAnnotateImages(requests);
+        // We send in one image, expecting just
+        // one response in batch
+        AnnotateImageResponse response =responses.getResponses(0);
+        System.out.println(response);
+    }
 
     @GetMapping( "/" )
     public String index( Model model )
@@ -77,11 +109,15 @@ public class FrontendController
             // Generate a random file name
             filename = UUID.randomUUID().toString() + ".jpg";
             WritableResource resource = ( WritableResource ) context.getResource( bucket + "/" + filename );
+
             // Write the file to Cloud Storage
             try( OutputStream os = resource.getOutputStream() )
             {
                 os.write( file.getBytes() );
             }
+
+            // After written to GCS, analyze the image.
+            analyzeImage(bucket + "/" + filename);
         }
 
         if( message != null && !message.trim().isEmpty() )
